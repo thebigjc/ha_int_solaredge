@@ -173,7 +173,7 @@ async def test_dynamic_and_stale_devices(
     mock_api(devices=devices)
     await _tick(hass, freezer, 12 * 60)
     registry = dr.async_get(hass)
-    assert registry.async_get_device_by_identifier((DOMAIN, "BATT-001"), api_key_entry.entry_id) is None
+    assert registry.async_get_device_by_identifier((DOMAIN, "BAT-1"), api_key_entry.entry_id) is None
     assert registry.async_get_device_by_identifier((DOMAIN, "7E9999B9-99"), api_key_entry.entry_id) is not None
     assert hass.states.get("sensor.inverter_2_ac_power") is not None
 

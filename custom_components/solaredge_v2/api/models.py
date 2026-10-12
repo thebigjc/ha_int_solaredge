@@ -88,12 +88,18 @@ class Series:
         return cls(unit=data.get("unit", unit), samples=samples)
 
     @property
-    def latest(self) -> float | None:
-        """The most recent non-null value."""
+    def latest_sample(self) -> Sample | None:
+        """The most recent sample with a value; the newest bucket is often still null."""
         for sample in reversed(self.samples):
             if sample.value is not None:
-                return sample.value
+                return sample
         return None
+
+    @property
+    def latest(self) -> float | None:
+        """The most recent non-null value."""
+        sample = self.latest_sample
+        return sample.value if sample else None
 
     @property
     def total(self) -> float | None:

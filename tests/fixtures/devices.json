@@ -3,5 +3,7 @@
   "partNumber": "SE7600H-US000BNU4", "firmwareVersion": "4.21.30", "active": true, "name": "Inverter 1", "connectedOptimizers": 20},
  {"type": "METER", "serialNumber": "M-PROD-001", "manufacturer": "SolarEdge", "model": "SE-MTR-3Y", "active": true,
   "name": "Production Meter", "connectedTo": "7E1234B5-67", "meterType": "PRODUCTION"},
- {"type": "BATTERY", "serialNumber": "BATT-001", "manufacturer": "SolarEdge", "model": "Home Battery", "active": true, "name": "Battery 1"}
+ {"type": "BATTERY", "serialNumber": "BAT-1", "manufacturer": "SolarEdge", "model": "Home Battery", "active": true, "name": "Battery 1"},
+ {"type": "BATTERY", "serialNumber": "BAT-2", "manufacturer": "SolarEdge", "model": "Home Battery", "active": true, "name": "Battery 2"},
+ {"type": "BATTERY", "serialNumber": "BAT-3", "manufacturer": "SolarEdge", "model": "Home Battery", "active": true, "name": "Battery 3"}
 ]

@@ -39,8 +39,9 @@ shape. Nothing in this table has been verified against the live API yet; see
 | Access tokens last 7,200 seconds; each refresh returns a new refresh token and invalidates the old one. | Documented |
 | Refresh tokens are valid 30 days. | Documented (homeowner guide) |
 | The callback carries `code`, `site_id`, and optionally `external_id`. | Documented |
-| SolarEdge Connect echoes the `state` parameter back on the callback. | Unverified. The homeowner guide's example shows it, the authentication page does not mention it. Home Assistant's callback requires it. |
-| SolarEdge Connect accepts or ignores the extra `response_type` and `redirect_uri` parameters Home Assistant adds to the authorize URL. | Unverified |
+| SolarEdge Connect echoes the `state` parameter back on the callback. | Verified live 2026-10-12: it does not. |
+| SolarEdge Connect ignores the `redirect_uri` of the authorize request and redirects to the registered URL; the token exchange accepts PKCE `code_verifier` and the registered `redirect_uri`. | Verified live 2026-10-12 |
+| `GET /sites/{id}/storage/telemetry` with no query returns today's data at QUARTER_HOUR; `stateOfEnergy` is a 0-1 fraction although its unit says PERCENTAGE; the newest bucket is often null. | Verified live 2026-10-12 |
 | `GET /sites` and `GET /alerts` accept only an API key, not an OAuth token. | Documented (OpenAPI `security` per operation) |
 | Revocation: `POST /v2/oauth2/revoke-token` with `{"token": ...}`. | Documented, not used |
 

@@ -1,6 +1,6 @@
 {
   "application_credentials": {
-    "description": "SolarEdge Site Access uses OAuth 2.0. Sign in to the [SolarEdge developer console]({developer_console}) with your mySolarEdge account, create a Site Access application with the SITE_DATA and DEVICE_DATA scopes, and set its Redirect URI to `{redirect_url}`. Enter the Client ID and the Client Secret (shown only once) here. The [Homeowner and Self-Access Guide]({self_access_guide}) walks through each screen."
+    "description": "SolarEdge Site Access uses OAuth 2.0. Sign in to the [SolarEdge developer console]({developer_console}) with your mySolarEdge account, create a Site Access application with the SITE_DATA and DEVICE_DATA scopes, and set its Redirect URI to exactly `{redirect_url}` (SolarEdge always redirects to the registered URL, and Home Assistant must be reachable at it from your browser; it is built from your external URL, or your internal URL if none is set). Enter the Client ID and the Client Secret (shown only once) here. The [Homeowner and Self-Access Guide]({self_access_guide}) walks through each screen."
   },
   "config": {
     "step": {
@@ -17,7 +17,7 @@
       },
       "site": {
         "title": "SolarEdge site",
-        "description": "Enter the Site ID you approved on the SolarEdge consent screen. It is the number in the monitoring portal address and in the site_id value of the page SolarEdge redirected to.",
+        "description": "SolarEdge did not report which site you approved. Enter the Site ID you approved on the consent screen; it is the number in the monitoring portal address.",
         "data": {
           "site_id": "Site ID"
         },
@@ -120,6 +120,8 @@
       "self_consumption_today": { "name": "Self-consumed today" },
       "to_storage_today": { "name": "Charged to storage today" },
       "from_storage_today": { "name": "Consumed from storage today" },
+      "site_battery_state_of_energy": { "name": "Battery state of energy" },
+      "site_battery_power": { "name": "Battery power" },
       "lifetime_energy": { "name": "Lifetime production" },
       "peak_power": { "name": "Peak power" },
       "last_update": { "name": "Last update from site" },
@@ -139,6 +141,7 @@
       "meter_export_energy_today": { "name": "Export today" },
       "battery_charge_power": { "name": "Charge power" },
       "battery_discharge_power": { "name": "Discharge power" },
+      "battery_power": { "name": "Power" },
       "battery_state_of_energy": { "name": "State of energy" },
       "battery_remaining_energy": { "name": "Remaining energy" },
       "battery_charge_energy_today": { "name": "Charged today" },

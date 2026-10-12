@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -26,6 +26,15 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SolarEdgeConfigEntry
 from .api import Device, DeviceType, Series, SiteData
+from .battery import (
+    Reading,
+    battery_power,
+    battery_remaining_energy,
+    battery_state_of_energy,
+    has_data,
+    site_power,
+    site_state_of_energy,
+)
 from .coordinator import SolarEdgeCoordinator
 from .entity import SolarEdgeDeviceEntity, SolarEdgeSiteEntity
 
@@ -39,6 +48,7 @@ class SiteSensorDescription(SensorEntityDescription):
     """A sensor computed from the site-level data."""
 
     value_fn: Callable[[SiteData], float | int | datetime | None]
+    timestamp_fn: Callable[[SiteData], datetime | None] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -46,6 +56,7 @@ class DeviceSensorDescription(SensorEntityDescription):
     """A sensor computed from one device's telemetry metrics."""
 
     value_fn: Callable[[Metrics], float | None]
+    timestamp_fn: Callable[[Metrics], datetime | None] | None = None
 
 
 def _latest_w(metric: str) -> Callable[[Metrics], float | None]:
@@ -58,6 +69,14 @@ def _today_wh(metric: str) -> Callable[[Metrics], float | None]:
 
 def _latest(metric: str) -> Callable[[Metrics], float | None]:
     return lambda m: m[metric].latest if metric in m else None
+
+
+def _value[T](fn: Callable[[T], Reading | None]) -> Callable[[T], float | None]:
+    return lambda x: r.value if (r := fn(x)) else None
+
+
+def _stamp[T](fn: Callable[[T], Reading | None]) -> Callable[[T], datetime | None]:
+    return lambda x: r.timestamp if (r := fn(x)) else None
 
 
 def _power(key: str, metric: str, *, enabled: bool = True) -> DeviceSensorDescription:
@@ -157,6 +176,27 @@ SITE_SENSORS: tuple[SiteSensorDescription, ...] = (
     ),
 )
 
+SITE_BATTERY_SENSORS: tuple[SiteSensorDescription, ...] = (
+    SiteSensorDescription(
+        key="site_battery_state_of_energy",
+        translation_key="site_battery_state_of_energy",
+        device_class=SensorDeviceClass.BATTERY,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_value(lambda d: site_state_of_energy(d.storage)),
+        timestamp_fn=_stamp(lambda d: site_state_of_energy(d.storage)),
+    ),
+    SiteSensorDescription(
+        key="site_battery_power",
+        translation_key="site_battery_power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_value(lambda d: site_power(d.storage)),
+        timestamp_fn=_stamp(lambda d: site_power(d.storage)),
+    ),
+)
+
 INVERTER_SENSORS: tuple[DeviceSensorDescription, ...] = (
     _power("inverter_power", "power"),
     _energy("inverter_energy_today", "energy"),
@@ -204,12 +244,22 @@ BATTERY_SENSORS: tuple[DeviceSensorDescription, ...] = (
     _power("battery_charge_power", "chargePower"),
     _power("battery_discharge_power", "dischargePower"),
     DeviceSensorDescription(
+        key="battery_power",
+        translation_key="battery_power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_value(battery_power),
+        timestamp_fn=_stamp(battery_power),
+    ),
+    DeviceSensorDescription(
         key="battery_state_of_energy",
         translation_key="battery_state_of_energy",
         device_class=SensorDeviceClass.BATTERY,
         native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_latest("stateOfEnergy"),
+        value_fn=_value(battery_state_of_energy),
+        timestamp_fn=_stamp(battery_state_of_energy),
     ),
     DeviceSensorDescription(
         key="battery_remaining_energy",
@@ -218,9 +268,8 @@ BATTERY_SENSORS: tuple[DeviceSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         suggested_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda m: (
-            m["remainingEnergy"].latest_watt_hours if "remainingEnergy" in m else None
-        ),
+        value_fn=_value(battery_remaining_energy),
+        timestamp_fn=_stamp(battery_remaining_energy),
     ),
     _energy("battery_charge_energy_today", "chargeEnergy", enabled=False),
     _energy("battery_discharge_energy_today", "dischargeEnergy", enabled=False),
@@ -245,13 +294,23 @@ async def async_setup_entry(
         return
 
     known: set[str] = set()
+    site_battery_added = False
 
     @callback
     def _add_new_devices() -> None:
+        nonlocal site_battery_added
+        if not site_battery_added and any(
+            d.type == DeviceType.BATTERY and _reports_data(coordinator.data, d)
+            for d in coordinator.data.devices
+        ):
+            site_battery_added = True
+            async_add_entities(SolarEdgeSiteSensor(coordinator, d) for d in SITE_BATTERY_SENSORS)
         new = [
             d
             for d in coordinator.data.devices
-            if d.type in DEVICE_SENSORS and d.serial_number not in known
+            if d.type in DEVICE_SENSORS
+            and d.serial_number not in known
+            and _reports_data(coordinator.data, d)
         ]
         if not new:
             return
@@ -266,6 +325,20 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(_add_new_devices))
 
 
+def _reports_data(data: SiteData, device: Device) -> bool:
+    """Batteries get entities only once they report something; others always do."""
+    if device.type != DeviceType.BATTERY:
+        return True
+    return has_data(data.storage.get(device.serial_number, {}))
+
+
+def _timestamp_attributes(timestamp: datetime | None) -> Mapping[str, str | int] | None:
+    """The bucket time as text for people and epoch seconds for numeric exports."""
+    if timestamp is None:
+        return None
+    return {"data_timestamp": timestamp.isoformat(), "data_timestamp_unix": int(timestamp.timestamp())}
+
+
 class SolarEdgeSiteSensor(SolarEdgeSiteEntity, SensorEntity):
     """A site-level sensor."""
 
@@ -275,6 +348,12 @@ class SolarEdgeSiteSensor(SolarEdgeSiteEntity, SensorEntity):
     def native_value(self) -> float | int | datetime | None:
         """Compute the value from the latest site data."""
         return self.entity_description.value_fn(self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, str | int] | None:
+        """When the value was measured, for sensors fed by bucketed telemetry."""
+        fn = self.entity_description.timestamp_fn
+        return _timestamp_attributes(fn(self.coordinator.data)) if fn else None
 
 
 class SolarEdgeDeviceSensor(SolarEdgeDeviceEntity, SensorEntity):
@@ -298,3 +377,11 @@ class SolarEdgeDeviceSensor(SolarEdgeDeviceEntity, SensorEntity):
         telemetry = getattr(self.coordinator.data, self._telemetry_attr)
         metrics = telemetry.get(self.serial_number)
         return self.entity_description.value_fn(metrics) if metrics else None
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, str | int] | None:
+        """When the value was measured, for sensors fed by bucketed telemetry."""
+        fn = self.entity_description.timestamp_fn
+        telemetry = getattr(self.coordinator.data, self._telemetry_attr)
+        metrics = telemetry.get(self.serial_number)
+        return _timestamp_attributes(fn(metrics)) if fn and metrics else None

@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
 
+from aiohttp import ClientResponse
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import config_entry_oauth2_flow
+from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
+from homeassistant.helpers.config_entry_oauth2_flow import LocalOAuth2ImplementationWithPkce
+from homeassistant.helpers.network import NoURLAvailableError
+from homeassistant.setup import async_setup_component
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
+from yarl import URL
 
 from custom_components.solaredge_v2.api import BASE_URL
 from custom_components.solaredge_v2.const import (
@@ -26,11 +32,12 @@ from custom_components.solaredge_v2.const import (
     DOMAIN,
     OAUTH2_AUTHORIZE,
     OAUTH2_TOKEN,
+    OAUTH_CALLBACK_PATH,
+    OAUTH_PENDING_TTL,
 )
 
 from .conftest import CLIENT_ID, CLIENT_SECRET, SITE, SITE_ID, MockApi
 
-REDIRECT = "https://example.com/auth/external/callback"
 TOKEN = {"access_token": "new-access", "refresh_token": "new-refresh", "token_type": "Bearer", "expires_in": 7200}
 
 
@@ -123,52 +130,288 @@ async def test_select_site_without_key(hass: HomeAssistant) -> None:
     assert result["step_id"] == "api_key"
 
 
-async def _oauth_to_callback(
-    hass: HomeAssistant, hass_client_no_auth: ClientSessionGenerator, result: dict[str, Any]
-) -> None:
-    state = config_entry_oauth2_flow._encode_jwt(hass, {"flow_id": result["flow_id"], "redirect_uri": REDIRECT})
+EXTERNAL_URL = "https://ha.example.com:8443"
+CALLBACK = f"{EXTERNAL_URL}{OAUTH_CALLBACK_PATH}"
+
+
+@pytest.fixture(autouse=True)
+def external_url(hass: HomeAssistant, current_request_with_host: None) -> None:
+    """Give Home Assistant the external URL the callback is derived from."""
+    hass.config.external_url = EXTERNAL_URL
+
+
+def _authorize_params(result: dict[str, Any]) -> dict[str, str]:
     assert result["type"] is FlowResultType.EXTERNAL_STEP
     assert result["url"].startswith(f"{OAUTH2_AUTHORIZE}?")
-    assert f"client_id={CLIENT_ID}" in result["url"]
-    assert "scope=SITE_DATA+DEVICE_DATA" in result["url"]
-    assert "access_duration=24" in result["url"]
+    return dict(URL(result["url"]).query)
+
+
+def _waiting(hass: HomeAssistant) -> set[str]:
+    return {f["flow_id"] for f in hass.config_entries.flow.async_progress()}
+
+
+async def _callback(
+    hass_client_no_auth: ClientSessionGenerator, query: str = "code=abcd&site_id=1234567"
+) -> ClientResponse:
     client = await hass_client_no_auth()
-    resp = await client.get(f"/auth/external/callback?code=abcd&state={state}")
-    assert resp.status == 200
+    return await client.get(f"{OAUTH_CALLBACK_PATH}?{query}")
 
 
-@pytest.mark.usefixtures("current_request_with_host", "credentials")
-async def test_oauth_full_flow(
+async def _start_authorize(
+    hass: HomeAssistant, result: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Continue a flow into the external step and return it with the authorize query."""
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    return result, _authorize_params(result)
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_authorize_url(hass: HomeAssistant, mock_api: MockApi) -> None:
+    """The authorize URL asks for PKCE S256 and the integration's own callback."""
+    result = await _start(hass, "oauth")
+    query = _authorize_params(result)
+    assert query["client_id"] == CLIENT_ID
+    assert query["response_type"] == "code"
+    assert query["scope"] == "SITE_DATA DEVICE_DATA"
+    assert query["access_duration"] == "24"
+    assert query["redirect_uri"] == CALLBACK
+    assert query["code_challenge_method"] == "S256"
+    assert query["state"]
+    assert 43 <= len(query["code_challenge"]) <= 128
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_oauth_full_flow_with_site_id(
     hass: HomeAssistant,
     hass_client_no_auth: ClientSessionGenerator,
     aioclient_mock: AiohttpClientMocker,
     mock_api: MockApi,
 ) -> None:
-    """OAuth, then the Site ID, creates a Site Access entry."""
+    """A callback without state but with site_id creates the entry with no manual step."""
     result = await _start(hass, "oauth")
-    await _oauth_to_callback(hass, hass_client_no_auth, result)
+    query = _authorize_params(result)
+    resp = await _callback(hass_client_no_auth)
+    assert resp.status == 200
+    aioclient_mock.post(OAUTH2_TOKEN, json=TOKEN)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_AUTH_TYPE] == AUTH_TYPE_OAUTH
+    assert result["data"][CONF_SITE_ID] == SITE_ID
+    assert result["data"]["token"]["access_token"] == "new-access"
+    assert result["result"].unique_id == str(SITE_ID)
+
+    token_call = next(c for c in aioclient_mock.mock_calls if c[0] == "POST")
+    body = token_call[2]
+    assert body["grant_type"] == "authorization_code"
+    assert body["code"] == "abcd"
+    assert body["client_secret"] == CLIENT_SECRET
+    assert body["redirect_uri"] == CALLBACK
+    assert (
+        LocalOAuth2ImplementationWithPkce.compute_code_challenge(body["code_verifier"])
+        == query["code_challenge"]
+    )
+    site_call = [c for c in aioclient_mock.mock_calls if str(c[1]) == SITE][-1]
+    assert site_call[3]["Authorization"] == "Bearer new-access"
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_each_flow_gets_its_own_verifier(hass: HomeAssistant, mock_api: MockApi) -> None:
+    """Two authorize attempts never share a challenge or a state."""
+    first = _authorize_params(await _start(hass, "oauth"))
+    second = _authorize_params(await _start(hass, "oauth"))
+    assert first["code_challenge"] != second["code_challenge"]
+    assert first["state"] != second["state"]
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_oauth_without_site_id_asks_for_it(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    aioclient_mock: AiohttpClientMocker,
+    mock_api: MockApi,
+) -> None:
+    """With no site_id in the callback the manual Site ID step is the fallback."""
+    result = await _start(hass, "oauth")
+    assert (await _callback(hass_client_no_auth, "code=abcd")).status == 200
     aioclient_mock.post(OAUTH2_TOKEN, json=TOKEN)
     result = await hass.config_entries.flow.async_configure(result["flow_id"])
     assert result["step_id"] == "site"
-
-    token_call = next(c for c in aioclient_mock.mock_calls if c[0] == "POST")
-    assert token_call[2]["grant_type"] == "authorization_code"
-    assert token_call[2]["client_secret"] == CLIENT_SECRET
-
     mock_api(site=403)
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_SITE_ID: SITE_ID})
     assert result["errors"] == {"base": "site_forbidden"}
     mock_api()
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_SITE_ID: SITE_ID})
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_AUTH_TYPE] == AUTH_TYPE_OAUTH
     assert result["data"][CONF_SITE_ID] == SITE_ID
-    assert result["data"]["token"]["access_token"] == "new-access"
-    site_call = [c for c in aioclient_mock.mock_calls if str(c[1]) == SITE][-1]
-    assert site_call[3]["Authorization"] == "Bearer new-access"
 
 
-@pytest.mark.usefixtures("current_request_with_host")
+@pytest.mark.usefixtures("credentials")
+async def test_oauth_site_id_still_validated(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    aioclient_mock: AiohttpClientMocker,
+    mock_api: MockApi,
+) -> None:
+    """A site_id the token cannot read falls back to the form with the error."""
+    result = await _start(hass, "oauth")
+    await _callback(hass_client_no_auth)
+    mock_api(site=403)
+    aioclient_mock.post(OAUTH2_TOKEN, json=TOKEN)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert result["step_id"] == "site"
+    assert result["errors"] == {"base": "site_forbidden"}
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_callback_site_id_must_be_numeric(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    aioclient_mock: AiohttpClientMocker,
+    mock_api: MockApi,
+) -> None:
+    """A non-numeric site_id is ignored rather than trusted."""
+    result = await _start(hass, "oauth")
+    await _callback(hass_client_no_auth, "code=abcd&site_id=abc")
+    aioclient_mock.post(OAUTH2_TOKEN, json=TOKEN)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert result["step_id"] == "site"
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_callback_without_pending_flow(
+    hass: HomeAssistant, hass_client_no_auth: ClientSessionGenerator, mock_api: MockApi
+) -> None:
+    """A callback while nothing waits is rejected with an explanation."""
+    assert await async_setup_component(hass, DOMAIN, {})
+    resp = await _callback(hass_client_no_auth)
+    assert resp.status == 400
+    assert "No SolarEdge sign-in is waiting" in await resp.text()
+    resp = await _callback(hass_client_no_auth, "code=abcd&state=nope")
+    assert resp.status == 400
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_callback_with_two_pending_flows(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    aioclient_mock: AiohttpClientMocker,
+    mock_api: MockApi,
+) -> None:
+    """Two waiting flows are ambiguous: reject and leave both usable."""
+    first = await _start(hass, "oauth")
+    second = await _start(hass, "oauth")
+    resp = await _callback(hass_client_no_auth)
+    assert resp.status == 409
+    assert "More than one" in await resp.text()
+    for flow in (first, second):
+        assert flow["flow_id"] in _waiting(hass)
+    # Removing one flow makes the other unambiguous again.
+    hass.config_entries.flow.async_abort(second["flow_id"])
+    assert (await _callback(hass_client_no_auth)).status == 200
+    aioclient_mock.post(OAUTH2_TOKEN, json=TOKEN)
+    result = await hass.config_entries.flow.async_configure(first["flow_id"])
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_echoed_state_selects_the_flow(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    aioclient_mock: AiohttpClientMocker,
+    mock_api: MockApi,
+) -> None:
+    """If SolarEdge starts returning state, it picks the flow even with two waiting."""
+    first = await _start(hass, "oauth")
+    query = _authorize_params(first)
+    await _start(hass, "oauth")
+    resp = await _callback(hass_client_no_auth, f"code=abcd&site_id={SITE_ID}&state={query['state']}")
+    assert resp.status == 200
+    aioclient_mock.post(OAUTH2_TOKEN, json=TOKEN)
+    result = await hass.config_entries.flow.async_configure(first["flow_id"])
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_expired_flow_is_rejected(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    mock_api: MockApi,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A callback after the pending window is rejected and the code is not used."""
+    result = await _start(hass, "oauth")
+    freezer.tick(OAUTH_PENDING_TTL + timedelta(seconds=1))
+    resp = await _callback(hass_client_no_auth)
+    assert resp.status == 400
+    assert result["flow_id"] in _waiting(hass)
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_callback_inside_window_is_accepted(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    mock_api: MockApi,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Just inside the window still works."""
+    await _start(hass, "oauth")
+    freezer.tick(OAUTH_PENDING_TTL - timedelta(seconds=1))
+    assert (await _callback(hass_client_no_auth)).status == 200
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_callback_without_code(
+    hass: HomeAssistant, hass_client_no_auth: ClientSessionGenerator, mock_api: MockApi
+) -> None:
+    """A callback with neither code nor error is rejected and keeps the flow waiting."""
+    result = await _start(hass, "oauth")
+    resp = await _callback(hass_client_no_auth, "site_id=1234567")
+    assert resp.status == 400
+    assert result["flow_id"] in _waiting(hass)
+    assert (await _callback(hass_client_no_auth)).status == 200
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_callback_rejected_by_user(
+    hass: HomeAssistant, hass_client_no_auth: ClientSessionGenerator, mock_api: MockApi
+) -> None:
+    """An error callback aborts the waiting flow."""
+    result = await _start(hass, "oauth")
+    assert (await _callback(hass_client_no_auth, "error=access_denied")).status == 200
+    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "user_rejected_authorize"
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_callback_flow_vanishes(
+    hass: HomeAssistant, hass_client_no_auth: ClientSessionGenerator, mock_api: MockApi
+) -> None:
+    """A flow that disappears between matching and resuming gives an error page."""
+    await _start(hass, "oauth")
+    with patch.object(hass.config_entries.flow, "async_configure", side_effect=UnknownFlow):
+        resp = await _callback(hass_client_no_auth)
+    assert resp.status == 400
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_dismissed_flow_is_forgotten(
+    hass: HomeAssistant, hass_client_no_auth: ClientSessionGenerator, mock_api: MockApi
+) -> None:
+    """A flow the user dismissed no longer counts as pending."""
+    result = await _start(hass, "oauth")
+    hass.config_entries.flow.async_abort(result["flow_id"])
+    assert (await _callback(hass_client_no_auth)).status == 400
+
+
+async def test_authorize_without_any_url(hass: HomeAssistant, credentials: None, mock_api: MockApi) -> None:
+    """With no usable Home Assistant URL the flow aborts with guidance."""
+    with patch("custom_components.solaredge_v2.oauth.get_url", side_effect=NoURLAvailableError):
+        result = await _start(hass, "oauth")
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_url_available"
+
+
 async def test_oauth_reauth(
     hass: HomeAssistant,
     hass_client_no_auth: ClientSessionGenerator,
@@ -176,19 +419,38 @@ async def test_oauth_reauth(
     mock_api: MockApi,
     oauth_entry: MockConfigEntry,
 ) -> None:
-    """Reauth for a Site Access entry replaces the token after checking the site."""
+    """Reauth uses the same callback and replaces the token after checking the site."""
     result = await oauth_entry.start_reauth_flow(hass)
     assert result["step_id"] == "reauth_confirm"
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    await _oauth_to_callback(hass, hass_client_no_auth, result)
+    result, query = await _start_authorize(hass, result)
+    assert query["redirect_uri"] == CALLBACK
+    assert (await _callback(hass_client_no_auth)).status == 200
     aioclient_mock.post(OAUTH2_TOKEN, json=TOKEN)
     result = await hass.config_entries.flow.async_configure(result["flow_id"])
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
     assert oauth_entry.data["token"]["access_token"] == "new-access"
+    assert oauth_entry.data[CONF_SITE_ID] == SITE_ID
 
 
-@pytest.mark.usefixtures("current_request_with_host")
+async def test_oauth_reauth_other_site_in_callback(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    aioclient_mock: AiohttpClientMocker,
+    mock_api: MockApi,
+    oauth_entry: MockConfigEntry,
+) -> None:
+    """Approving a different site than the entry's aborts without saving."""
+    result = await oauth_entry.start_reauth_flow(hass)
+    result, _ = await _start_authorize(hass, result)
+    await _callback(hass_client_no_auth, "code=abcd&site_id=999")
+    aioclient_mock.post(OAUTH2_TOKEN, json=TOKEN)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "oauth_site_forbidden"
+    assert oauth_entry.data["token"]["access_token"] == "access"
+
+
 async def test_oauth_reconfigure_wrong_site(
     hass: HomeAssistant,
     hass_client_no_auth: ClientSessionGenerator,
@@ -199,9 +461,8 @@ async def test_oauth_reconfigure_wrong_site(
     """A new grant that cannot read the configured site aborts without saving."""
     result = await oauth_entry.start_reconfigure_flow(hass)
     assert result["step_id"] == "reconfigure"
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    await _oauth_to_callback(hass, hass_client_no_auth, result)
-    aioclient_mock.post(OAUTH2_TOKEN, json=TOKEN)
+    result, _ = await _start_authorize(hass, result)
+    await _callback(hass_client_no_auth, "code=abcd")
     mock_api(site=403)
     aioclient_mock.post(OAUTH2_TOKEN, json=TOKEN)
     result = await hass.config_entries.flow.async_configure(result["flow_id"])

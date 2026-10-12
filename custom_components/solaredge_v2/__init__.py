@@ -5,16 +5,30 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_entry_oauth2_flow, device_registry as dr
+from homeassistant.helpers import (
+    config_entry_oauth2_flow,
+    config_validation as cv,
+    device_registry as dr,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.typing import ConfigType
 
 from .api import ApiKeyAuth, AuthProvider, BearerTokenAuth, SolarEdgeClient
 from .const import AUTH_TYPE_OAUTH, CONF_AUTH_TYPE, CONF_SITE_ID, DOMAIN, MANUFACTURER
 from .coordinator import SolarEdgeCoordinator
+from .oauth import async_pending
 
 PLATFORMS = [Platform.SENSOR]
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 type SolarEdgeConfigEntry = ConfigEntry[SolarEdgeCoordinator]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Serve the OAuth callback so a late or stray redirect gets a clear answer."""
+    async_pending(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SolarEdgeConfigEntry) -> bool:

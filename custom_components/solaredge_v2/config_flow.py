@@ -127,20 +127,25 @@ class SolarEdgeFlowHandler(
         self._oauth_data = data
         if self.source in (SOURCE_REAUTH, SOURCE_RECONFIGURE):
             entry = self._existing_entry()
-            errors, _ = await self._async_validate_site(
-                self._bearer(), int(entry.data[CONF_SITE_ID])
-            )
+            site_id = int(entry.data[CONF_SITE_ID])
+            granted = self.external_data.get(CONF_SITE_ID)
+            if granted is not None and int(granted) != site_id:
+                return self.async_abort(reason="oauth_site_forbidden")
+            errors, _ = await self._async_validate_site(self._bearer(), site_id)
             if errors:
                 return self.async_abort(reason=f"oauth_{errors['base']}")
             return self.async_update_reload_and_abort(
                 entry, data_updates={**data, CONF_AUTH_TYPE: AUTH_TYPE_OAUTH}
             )
+        if (granted := self.external_data.get(CONF_SITE_ID)) is not None:
+            # The callback names the approved site, so skip the manual question.
+            return await self.async_step_site({CONF_SITE_ID: granted})
         return await self.async_step_site()
 
     async def async_step_site(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask for the Site ID; the OAuth callback carries it but Home Assistant drops it."""
+        """Create the entry for a Site ID; asked only when the callback did not carry one."""
         errors: dict[str, str] = {}
         if user_input is not None:
             site_id = int(user_input[CONF_SITE_ID])

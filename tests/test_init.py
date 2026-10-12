@@ -83,6 +83,7 @@ async def test_oauth_setup_refreshes_token(
         "refresh_token": "refresh",
     }
     assert oauth_entry.data["token"]["access_token"] == "fresh"
+    assert oauth_entry.data["token"]["refresh_token"] == "r2"
     site_call = next(c for c in aioclient_mock.mock_calls if str(c[1]) == SITE)
     assert site_call[3]["Authorization"] == "Bearer fresh"
 

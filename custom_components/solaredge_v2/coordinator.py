@@ -127,9 +127,7 @@ class SolarEdgeCoordinator(DataUpdateCoordinator[SiteData]):
                     self.site_id, start, end
                 )
             if DeviceType.BATTERY in types:
-                data.storage = await self.client.async_get_storage_telemetry(
-                    self.site_id, start, end
-                )
+                data.storage = await self.client.async_get_storage_telemetry(self.site_id)
         except SolarEdgeForbiddenError as err:
             self.scope_denied = True
             LOGGER.warning("Device telemetry refused for site %s: %s", self.site_id, err)

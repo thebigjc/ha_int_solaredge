@@ -14,6 +14,8 @@ OAUTH2_AUTHORIZE: Final = "https://connect.solaredge.com/authorize"
 OAUTH2_TOKEN: Final = "https://monitoringapi.solaredge.com/v2/oauth2/token"
 OAUTH2_SCOPES: Final = "SITE_DATA DEVICE_DATA"
 OAUTH2_ACCESS_DURATION_MONTHS: Final = "24"
+OAUTH_CALLBACK_PATH: Final = "/api/solaredge_v2/oauth/callback"
+OAUTH_PENDING_TTL: Final = timedelta(minutes=10)
 
 CONF_SITE_ID: Final = "site_id"
 CONF_AUTH_TYPE: Final = "auth_type"

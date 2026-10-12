@@ -6,7 +6,8 @@
   ],
   "config_flow": true,
   "dependencies": [
-    "application_credentials"
+    "application_credentials",
+    "http"
   ],
   "documentation": "https://github.com/trooperthorn/ha_int_solaredge",
   "integration_type": "hub",

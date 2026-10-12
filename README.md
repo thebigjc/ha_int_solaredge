@@ -33,11 +33,28 @@ site inventory.
 | AC voltage, AC current, Grid frequency | Inverter | same | No |
 | Production, consumption, import, export power | Meter | `GET /sites/{id}/meters/telemetry` | Yes |
 | Production, consumption, import, export today | Meter | same | No |
-| Charge power, Discharge power, State of energy, Remaining energy | Battery | `GET /sites/{id}/storage/telemetry` | Yes |
+| Battery state of energy (capacity-weighted, %), Battery power (W, positive = charging) | Site | `GET /sites/{id}/storage/telemetry` | Yes (only when a battery reports data) |
+| Power (W, positive = charging), Charge power, Discharge power, State of energy (%), Remaining energy | Battery (one device per battery that reports data) | same | Yes |
 | Charged today, Discharged today | Battery | same | No |
 
 The "today" sensors reset at midnight site time and use the `total_increasing`
 state class, so they work in the Energy dashboard.
+
+Battery sensors carry `data_timestamp` (ISO 8601) and `data_timestamp_unix`
+(epoch seconds) attributes: the start of the 15-minute bucket the value was
+measured in. SolarEdge reports it 15 to 30 minutes late, so this is the true
+measurement time. The newest bucket is often still empty, so the latest filled
+bucket is used. The site state of energy weights each battery by its capacity
+(remaining energy divided by its state of energy).
+
+## Setting up Site Access
+
+1. Register the Redirect URI shown in the Add Application Credentials dialog
+   (`<HA URL>/api/solaredge_v2/oauth/callback`) in your SolarEdge application.
+2. Add the Client ID and Client Secret under Application credentials.
+3. Add the integration, choose Site Access, and approve the site on the
+   SolarEdge page. The window then returns to Home Assistant and the entry is
+   created. Keep only one setup or reauthentication open at a time.
 
 ## Use cases
 
@@ -70,7 +87,13 @@ Business Pro and Enterprise tiers and are not implemented.
 - One of:
   - **Site Access (homeowners).** A Site Access application with the
     `SITE_DATA` and `DEVICE_DATA` scopes and the Redirect URI
-    `https://my.home-assistant.io/redirect/oauth`. Sign in to the developer
+    `https://<your-ha-host>/api/solaredge_v2/oauth/callback`, where the host is
+    your Home Assistant **external URL** (or internal URL if no external one is
+    set), exactly as configured under **Settings > System > Network**.
+    SolarEdge ignores any redirect sent with the sign-in request and always uses
+    the registered one, and it does not return `state`, so the standard
+    `my.home-assistant.io` redirect cannot work. Your browser must be able to
+    reach that URL. Sign in to the developer
     console with your mySolarEdge account. SolarEdge's
     [Homeowner and Self-Access Guide](https://api-docs.solaredge.com/docs/developer-platform/df8kx5j4z9vi0-homeowner-and-self-access-guide)
     shows each screen.
@@ -96,7 +119,7 @@ Asked during setup:
 | Parameter | Access type | Meaning |
 | --- | --- | --- |
 | Access type | both | Site Access (OAuth) or Fleet Access (App API Key). |
-| Site ID | Site Access | The numeric site ID you approved on the consent screen. Home Assistant's OAuth callback does not pass SolarEdge's `site_id` parameter through, so it is asked for after sign-in and checked with `GET /sites/{id}`. |
+| Site ID | Site Access | Taken from the `site_id` in SolarEdge's redirect and checked with `GET /sites/{id}`. Asked for only if the redirect did not carry it. |
 | App API Key | Fleet Access | Sent in the `X-API-Key` header. The flow lists every site the key can read. |
 | Site | Fleet Access | Chosen from that list when there is more than one. |
 
@@ -151,7 +174,9 @@ sends a notification when the Open alerts sensor rises above zero.
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
 | "Add application credentials first" when choosing Site Access | No Client ID and Secret stored | Add them under Application credentials (Installation step 3). |
-| Redirect error after approving | The application's Redirect URI does not match | Set it to `https://my.home-assistant.io/redirect/oauth` in the developer console. |
+| Redirect error after approving | The application's Redirect URI does not match | Set it to exactly `<your HA URL>/api/solaredge_v2/oauth/callback` in the developer console. |
+| "Invalid parameters given" on my.home-assistant.io | An old setup registered the my.home-assistant.io redirect, which SolarEdge cannot complete | Change the application's Redirect URI as above and start the setup again. |
+| Callback page says no sign-in is waiting, or more than one | The flow expired (10 minutes), was removed, or two sign-ins are pending | Remove stale setup or reauthentication flows, then start again. |
 | "These credentials cannot read this site" | Wrong Site ID, or the grant covers another site | Enter the Site ID shown on the consent screen, or approve the correct site. |
 | Repair issue "monthly API credits used up" | The developer account's credits are spent | Raise the interval or turn off per-device telemetry; updates resume at the next billing cycle. |
 | Repair issue "device telemetry not permitted" | The grant lacks `DEVICE_DATA` | Reconfigure and approve both scopes, or turn telemetry off. |

@@ -161,12 +161,15 @@ class SolarEdgeClient:
             await self._telemetry(f"/sites/{site_id}/meters/telemetry", start, end), "meters"
         )
 
-    async def async_get_storage_telemetry(
-        self, site_id: int, start: datetime, end: datetime
-    ) -> Telemetry:
-        """GET /sites/{id}/storage/telemetry at HOUR."""
+    async def async_get_storage_telemetry(self, site_id: int) -> Telemetry:
+        """GET /sites/{id}/storage/telemetry for today at the API's default QUARTER_HOUR.
+
+        No from/to or resolution is sent: windowed requests were rejected with
+        "Failed to convert [...] to required type [Instant]", while the bare call returns
+        today's data.
+        """
         return parse_telemetry(
-            await self._telemetry(f"/sites/{site_id}/storage/telemetry", start, end), "storage"
+            await self._request(f"/sites/{site_id}/storage/telemetry"), "storage"
         )
 
     async def _telemetry(self, path: str, start: datetime, end: datetime) -> Any:

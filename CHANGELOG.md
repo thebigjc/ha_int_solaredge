@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Site Access sign-in no longer depends on `state`, which SolarEdge does not
+  return (upstream issues 6, 8, 15). The integration serves its own callback at
+  `/api/solaredge_v2/oauth/callback`, uses PKCE S256, and takes `site_id` from
+  the redirect. Register that URL (on your HA external URL) as the application's
+  Redirect URI. Reauthentication uses the same path.
+- Battery state of energy is now percent (the API sends a 0-1 fraction). Added
+  site battery state of energy (capacity-weighted) and battery power sensors,
+  per-battery power, `data_timestamp` and `data_timestamp_unix` attributes, and
+  entities only for batteries that report data.
+- Storage telemetry is requested without `from`/`to`, which avoids the HTTP 400
+  "Failed to convert ... [Instant]" error.
+
 - Added tests proving that the API key, access token, refresh token, and
   client secret never reach a log line, an error message, or a request URL
   when the site call or the token refresh fails. Prompted by the core V1

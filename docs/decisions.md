@@ -36,13 +36,20 @@ an installer profile. Installers who already hold an account key would lose
 their path if only OAuth were offered, and the API key path costs little
 extra code. Rejected: OAuth only.
 
-## 2026-09-29: Ask for the Site ID after OAuth
+## 2026-10-12: Own OAuth callback without `state`
 
-SolarEdge returns `site_id` on the callback, but Home Assistant's callback view
-forwards only `code`, `state`, and `error` to the flow, and `GET /sites`
-refuses OAuth tokens. Rejected: registering a custom callback view, which
-would duplicate core's state verification. The flow asks for the ID and
-proves access with `GET /sites/{id}` before creating the entry.
+Verified live: SolarEdge does not return `state`, and ignores the request's
+`redirect_uri` in favour of the registered one, so Home Assistant's
+`/auth/external/callback` and my.home-assistant.io cannot match a callback to
+its flow (upstream issues 6, 8, 15). The integration now serves
+`/api/solaredge_v2/oauth/callback`, which resolves the callback to the single
+waiting flow (rejecting zero, several, or expired ones, 10 minute window) and
+passes `code` and `site_id` to the flow. PKCE S256 with a per-flow verifier
+binds the code to that flow in place of `state` (RFC 9700 2.1, 4.7.1). A
+`state` is still sent and preferred if ever echoed. When the callback carries
+`site_id` the manual Site ID question is skipped; it stays as a fallback, and
+the site is still proved with `GET /sites/{id}`. Supersedes the 2026-09-29
+decision to ask for the Site ID and not to add a callback view.
 
 ## 2026-09-29: Poll for the Free tier by default
 

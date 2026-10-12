@@ -77,8 +77,12 @@ async def test_reads_every_endpoint(
     assert inverters["7E1234B5-67"]["power"].latest_watts == pytest.approx(4310)
     meters = await client.async_get_meter_telemetry(SITE_ID, START, END)
     assert meters["M-PROD-001"]["productionEnergy"].total_watt_hours == pytest.approx(3120.5)
-    storage = await client.async_get_storage_telemetry(SITE_ID, START, END)
-    assert storage["BATT-001"]["remainingEnergy"].latest_watt_hours == pytest.approx(6500)
+    storage = await client.async_get_storage_telemetry(SITE_ID)
+    assert storage["BAT-1"]["remainingEnergy"].latest_watt_hours == pytest.approx(1614.2666)
+    storage_call = next(
+        c for c in aioclient_mock.mock_calls if str(c[1]).startswith(f"{SITE}/storage/telemetry")
+    )
+    assert dict(storage_call[1].query) == {}
 
     for _method, url, _data, headers in aioclient_mock.mock_calls:
         assert headers["X-API-Key"] == "test-key"
