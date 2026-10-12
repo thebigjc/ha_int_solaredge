@@ -16,6 +16,11 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClien
 from custom_components.solaredge_v2.const import (
     CONF_DEVICE_TELEMETRY,
     CONF_SCAN_INTERVAL_MINUTES,
+    CONF_STORAGE_INTERVAL_MINUTES,
+    CONF_TELEMETRY_INTERVAL_MINUTES,
+    CONF_TELEMETRY_INVERTERS,
+    CONF_TELEMETRY_METERS,
+    CONF_TELEMETRY_STORAGE,
     DOMAIN,
     ISSUE_CREDIT_LIMIT,
     ISSUE_SCOPE_MISSING,
@@ -240,3 +245,113 @@ async def test_windows_use_site_local_time(
     assert query("/inverters/telemetry")["from"] == "2026-09-29T00:00:00-05:00"
     assert query("/inverters/telemetry")["to"] == "2026-09-29T13:05:00-05:00"
     assert query("/energy")["from"] == "2021-04-01T00:00:00-05:00"
+
+
+BATTERY_ONLY = {
+    CONF_SCAN_INTERVAL_MINUTES: 720,
+    CONF_TELEMETRY_INVERTERS: False,
+    CONF_TELEMETRY_METERS: False,
+    CONF_TELEMETRY_STORAGE: True,
+    CONF_STORAGE_INTERVAL_MINUTES: 30,
+}
+
+
+async def test_battery_only_polls_only_due_groups(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_api: MockApi,
+    aioclient_mock: AiohttpClientMocker,
+    api_key_entry: MockConfigEntry,
+) -> None:
+    """Storage every 30 minutes, site every 12 hours, inverters and meters never."""
+    hass.config_entries.async_update_entry(api_key_entry, options=BATTERY_ONLY)
+    await _setup(hass, api_key_entry)
+    assert api_key_entry.runtime_data.update_interval == timedelta(minutes=30)
+    soe = "sensor.example_home_battery_state_of_energy"
+    assert hass.states.get(soe).state != STATE_UNAVAILABLE
+    assert hass.states.get("sensor.inverter_1_ac_power") is None
+    for _ in range(24):
+        await _tick(hass, freezer, 30)
+    assert _calls(aioclient_mock, "/storage/telemetry") == 25  # setup plus 24 ticks
+    assert _calls(aioclient_mock, "/overview") == 2
+    assert _calls(aioclient_mock, "/power") == 2
+    assert _calls(aioclient_mock, "/alerts") == 2
+    assert _calls(aioclient_mock, "/devices") == 2
+    assert _calls(aioclient_mock, "/inverters/telemetry") == 0
+    assert _calls(aioclient_mock, "/meters/telemetry") == 0
+
+
+async def test_values_persist_between_group_polls(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_api: MockApi,
+    api_key_entry: MockConfigEntry,
+) -> None:
+    """Site sensors keep their value while only storage is polled, and stay available."""
+    hass.config_entries.async_update_entry(api_key_entry, options=BATTERY_ONLY)
+    await _setup(hass, api_key_entry)
+    assert hass.states.get(POWER).state == "4310.7"
+    mock_api(overview=500, power=500)  # would fail if the site group were called
+    await _tick(hass, freezer, 30)
+    await _tick(hass, freezer, 30)
+    assert hass.states.get(POWER).state == "4310.7"
+
+
+async def test_telemetry_family_with_own_interval(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_api: MockApi,
+    aioclient_mock: AiohttpClientMocker,
+    api_key_entry: MockConfigEntry,
+) -> None:
+    """Meters follow a 60 minute telemetry-interval while storage runs every 30."""
+    hass.config_entries.async_update_entry(
+        api_key_entry,
+        options={
+            CONF_SCAN_INTERVAL_MINUTES: 120,
+            CONF_TELEMETRY_METERS: True,
+            CONF_TELEMETRY_INTERVAL_MINUTES: 60,
+            CONF_TELEMETRY_STORAGE: True,
+            CONF_STORAGE_INTERVAL_MINUTES: 30,
+        },
+    )
+    await _setup(hass, api_key_entry)
+    for _ in range(4):
+        await _tick(hass, freezer, 30)
+    assert _calls(aioclient_mock, "/meters/telemetry") == 3
+    assert _calls(aioclient_mock, "/storage/telemetry") == 5
+    assert _calls(aioclient_mock, "/overview") == 2
+
+
+async def test_credit_limit_with_multiple_groups(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_api: MockApi,
+    api_key_entry: MockConfigEntry,
+) -> None:
+    """A credit refusal on the storage group raises the issue and recovers."""
+    hass.config_entries.async_update_entry(api_key_entry, options=BATTERY_ONLY)
+    await _setup(hass, api_key_entry)
+    issue_id = f"{ISSUE_CREDIT_LIMIT}_{api_key_entry.entry_id}"
+    mock_api(headers={"x-ratelimit-remaining-minute": "3"}, storage=429)
+    await _tick(hass, freezer, 30)
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+    mock_api()
+    await _tick(hass, freezer, 6 * 60)
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+    assert hass.states.get("sensor.example_home_battery_state_of_energy").state != STATE_UNAVAILABLE
+
+
+async def test_legacy_options_behave_as_before(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_api: MockApi,
+    aioclient_mock: AiohttpClientMocker,
+    api_key_entry: MockConfigEntry,
+) -> None:
+    """Old device_telemetry true polls all three families on every site tick."""
+    await _setup(hass, api_key_entry)
+    for _ in range(2):
+        await _tick(hass, freezer, 60)
+    for suffix in ("/overview", "/inverters/telemetry", "/meters/telemetry", "/storage/telemetry"):
+        assert _calls(aioclient_mock, suffix) == 3, suffix

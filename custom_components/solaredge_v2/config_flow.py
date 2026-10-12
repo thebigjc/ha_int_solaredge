@@ -48,15 +48,20 @@ from .const import (
     AUTH_TYPE_API_KEY,
     AUTH_TYPE_OAUTH,
     CONF_AUTH_TYPE,
-    CONF_DEVICE_TELEMETRY,
     CONF_SCAN_INTERVAL_MINUTES,
     CONF_SITE_ID,
-    DEFAULT_DEVICE_TELEMETRY,
-    DEFAULT_SCAN_INTERVAL_MINUTES,
+    CONF_STORAGE_INTERVAL_MINUTES,
+    CONF_TELEMETRY_INTERVAL_MINUTES,
+    CONF_TELEMETRY_INVERTERS,
+    CONF_TELEMETRY_METERS,
+    CONF_TELEMETRY_STORAGE,
     DOMAIN,
+    FOLLOW_SITE_INTERVAL,
+    FREE_TIER_MONTHLY_CREDITS,
     MAX_SCAN_INTERVAL_MINUTES,
     MIN_SCAN_INTERVAL_MINUTES,
 )
+from .polling import estimate_monthly_credits, resolve_plan
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -305,6 +310,24 @@ def _error_key(err: SolarEdgeError) -> str:
     return "unknown"
 
 
+CREDIT_WARNING = (
+    f"**Warning:** this exceeds the {FREE_TIER_MONTHLY_CREDITS:,} credits a month of the "
+    "Free tier. Updates stop when the quota is spent."
+)
+
+
+def _minutes_selector(minimum: int) -> NumberSelector:
+    return NumberSelector(
+        NumberSelectorConfig(
+            min=minimum,
+            max=MAX_SCAN_INTERVAL_MINUTES,
+            step=1,
+            unit_of_measurement="min",
+            mode=NumberSelectorMode.BOX,
+        )
+    )
+
+
 class SolarEdgeOptionsFlow(OptionsFlowWithReload):
     """Tune polling against the monthly credit budget."""
 
@@ -312,34 +335,57 @@ class SolarEdgeOptionsFlow(OptionsFlowWithReload):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Show and store the polling options."""
+        errors: dict[str, str] = {}
+        # Defaults come from the resolved plan so an entry saved with the older
+        # single telemetry switch shows, and keeps, the behaviour it had.
+        current = resolve_plan(self.config_entry.options)
+        shown: dict[str, Any] = {
+            CONF_SCAN_INTERVAL_MINUTES: current.site_minutes,
+            CONF_TELEMETRY_INVERTERS: current.inverters,
+            CONF_TELEMETRY_METERS: current.meters,
+            CONF_TELEMETRY_STORAGE: current.storage,
+            CONF_TELEMETRY_INTERVAL_MINUTES: self.config_entry.options.get(
+                CONF_TELEMETRY_INTERVAL_MINUTES, FOLLOW_SITE_INTERVAL
+            ),
+            CONF_STORAGE_INTERVAL_MINUTES: self.config_entry.options.get(
+                CONF_STORAGE_INTERVAL_MINUTES, FOLLOW_SITE_INTERVAL
+            ),
+        }
         if user_input is not None:
-            return self.async_create_entry(
-                data={
-                    CONF_SCAN_INTERVAL_MINUTES: int(user_input[CONF_SCAN_INTERVAL_MINUTES]),
-                    CONF_DEVICE_TELEMETRY: user_input[CONF_DEVICE_TELEMETRY],
-                }
-            )
-        options = self.config_entry.options
+            shown = {
+                key: int(user_input.get(key, value))
+                if isinstance(value, int) and not isinstance(value, bool)
+                else user_input.get(key, value)
+                for key, value in shown.items()
+            }
+            for key in (CONF_TELEMETRY_INTERVAL_MINUTES, CONF_STORAGE_INTERVAL_MINUTES):
+                if 0 < shown[key] < MIN_SCAN_INTERVAL_MINUTES:
+                    errors[key] = "interval_too_short"
+            if not errors:
+                return self.async_create_entry(data=shown)
+        credits = estimate_monthly_credits(resolve_plan(shown))
         schema = probatio.Schema(
             {
-                probatio.Required(
-                    CONF_SCAN_INTERVAL_MINUTES,
-                    default=options.get(
-                        CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_SCAN_INTERVAL_MINUTES,
-                        max=MAX_SCAN_INTERVAL_MINUTES,
-                        step=1,
-                        unit_of_measurement="min",
-                        mode=NumberSelectorMode.BOX,
-                    )
+                probatio.Required(CONF_SCAN_INTERVAL_MINUTES, default=shown[CONF_SCAN_INTERVAL_MINUTES]): _minutes_selector(
+                    MIN_SCAN_INTERVAL_MINUTES
                 ),
+                probatio.Required(CONF_TELEMETRY_INVERTERS, default=shown[CONF_TELEMETRY_INVERTERS]): BooleanSelector(),
+                probatio.Required(CONF_TELEMETRY_METERS, default=shown[CONF_TELEMETRY_METERS]): BooleanSelector(),
+                probatio.Required(CONF_TELEMETRY_STORAGE, default=shown[CONF_TELEMETRY_STORAGE]): BooleanSelector(),
                 probatio.Required(
-                    CONF_DEVICE_TELEMETRY,
-                    default=options.get(CONF_DEVICE_TELEMETRY, DEFAULT_DEVICE_TELEMETRY),
-                ): BooleanSelector(),
+                    CONF_TELEMETRY_INTERVAL_MINUTES, default=shown[CONF_TELEMETRY_INTERVAL_MINUTES]
+                ): _minutes_selector(FOLLOW_SITE_INTERVAL),
+                probatio.Required(
+                    CONF_STORAGE_INTERVAL_MINUTES, default=shown[CONF_STORAGE_INTERVAL_MINUTES]
+                ): _minutes_selector(FOLLOW_SITE_INTERVAL),
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "credits": f"{credits:,}",
+                "warning": CREDIT_WARNING if credits > FREE_TIER_MONTHLY_CREDITS else "",
+            },
+        )

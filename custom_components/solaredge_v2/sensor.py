@@ -290,16 +290,22 @@ async def async_setup_entry(
     """Add site sensors now and device sensors whenever the inventory grows."""
     coordinator = entry.runtime_data
     async_add_entities(SolarEdgeSiteSensor(coordinator, d) for d in SITE_SENSORS)
-    if not coordinator.device_telemetry:
+    if not coordinator.plan.any_telemetry:
         return
 
+    plan = coordinator.plan
+    enabled: dict[str, bool] = {
+        DeviceType.INVERTER: plan.inverters,
+        DeviceType.METER: plan.meters,
+        DeviceType.BATTERY: plan.storage,
+    }
     known: set[str] = set()
     site_battery_added = False
 
     @callback
     def _add_new_devices() -> None:
         nonlocal site_battery_added
-        if not site_battery_added and any(
+        if coordinator.plan.storage and not site_battery_added and any(
             d.type == DeviceType.BATTERY and _reports_data(coordinator.data, d)
             for d in coordinator.data.devices
         ):
@@ -309,6 +315,7 @@ async def async_setup_entry(
             d
             for d in coordinator.data.devices
             if d.type in DEVICE_SENSORS
+            and enabled[d.type]
             and d.serial_number not in known
             and _reports_data(coordinator.data, d)
         ]

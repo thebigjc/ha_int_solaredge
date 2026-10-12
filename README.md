@@ -127,22 +127,39 @@ Options (**Configure** on the entry):
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| Update interval | 60 minutes (15 to 360) | How often production, consumption, and power are read. |
-| Per-device telemetry | Off | Adds inverter, meter, and battery sensors at up to three extra credits per update. Requires the `DEVICE_DATA` scope for Site Access. |
+| Update interval | 60 minutes (15 to 1440) | How often production, consumption, and power are read (2 credits each time). |
+| Inverter, meter, storage telemetry | Off | Each family adds its sensors and one credit per read. Requires the `DEVICE_DATA` scope for Site Access. |
+| Inverter and meter interval | 0 (follow the update interval; else 15 to 1440) | Minutes between inverter and meter reads. |
+| Storage interval | 0 (follow the update interval; else 15 to 1440) | Minutes between battery reads. |
+
+The form shows the estimated credits a month for the settings and warns above
+2,000, the Free tier figure. Entries saved with the older single
+"per-device telemetry" switch keep their behaviour: on means all three
+families, at the update interval.
 
 ## How data is updated
 
 Every API call costs one credit. The integration polls on three cadences:
 
-- Every update interval: `overview` and `power` (2 credits), plus one
-  telemetry call per device family present when per-device telemetry is on.
-- Every 6 hours: site metadata, lifetime energy, and open alerts (3 credits).
+- Every update interval: `overview` and `power` (2 credits).
+- Every telemetry interval: one call per enabled device family present
+  (inverters and meters share an interval, storage has its own; both follow the
+  update interval by default).
+- Every 6 hours, or the update interval if longer: site metadata, lifetime
+  energy, and open alerts (3 credits).
 - Every 12 hours: the device inventory (1 credit).
 
 With the defaults, one site uses about 1,860 credits in a 30-day month. The
 arithmetic and other combinations are in
 [docs/operations.md](docs/operations.md). The API's finest resolution is 15
 minutes, so an interval shorter than that returns the same bucket.
+
+Worked example: you read PV and grid power locally over Modbus and want only
+the battery state of charge. Turn on storage telemetry alone, set the storage
+interval to 30 and the update interval to 720. That is storage 1,440, site 120,
+site details 180, and inventory 60: about 1,800 credits a month. Turning on
+all three families at 30 minutes would be about 7,620. Data of a group that is
+not due keeps its last value between reads.
 
 ## Automation example
 

@@ -111,3 +111,29 @@ each remediation item against this integration:
 
 The property is now enforced by test rather than by review; see
 [security.md](security.md).
+
+## 2026-10-12: Per-group polling budget, defaults unchanged
+
+Users who want one data group often (battery state of charge every 30
+minutes) could not without spending about 7,200 credits a month. Polling is now
+configured per group: site (overview and power), inverter and meter telemetry
+(one shared interval), storage telemetry (own interval), each family
+switchable. The coordinator ticks at the GCD of the enabled intervals and calls
+only due groups; other data keeps its last value.
+
+- Defaults and legacy options are unchanged: no per-family keys means
+  `device_telemetry` decides all three, every interval follows the site
+  interval, so upgraded installs make the same calls at the same times. The
+  entry is not migrated in place; `polling.resolve_plan` interprets old options
+  and the options form writes the new keys on save.
+- Interval 0 means "follow the update interval". Rejected: a separate interval
+  per family (more fields for little gain) and a single telemetry interval
+  (cannot say "storage often, inverters rarely").
+- Slow data (metadata, lifetime, alerts) is derived as max(6 h, site interval),
+  not another option. Inventory stays at 12 hours.
+- Site maximum raised from 360 to 1440 minutes so site data can be made rare
+  (a daily snapshot is 60 credits a month); longer leaves "today" totals stale.
+- The estimator warns above `FREE_TIER_MONTHLY_CREDITS` (2,000) but does not
+  block, since other tiers differ. The estimate assumes every enabled family is
+  present, and the form shows the estimate of the saved settings.
+

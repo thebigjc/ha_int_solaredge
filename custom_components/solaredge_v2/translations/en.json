@@ -98,16 +98,27 @@
     "step": {
       "init": {
         "title": "Polling and credits",
-        "description": "Every API call costs one credit. The Free tier allows 2,000 credits a month; the defaults use about 1,860 in a 30-day month for one site.",
+        "description": "Every API call costs one credit. The Free tier allows 2,000 credits a month. With these settings one site uses about {credits} credits in a 30-day month (assuming every selected device family is present). {warning}\n\nSite data (overview and power) is read at the update interval. Each device family you turn on is read at the telemetry interval (inverters and meters) or the storage interval, which follow the update interval when set to 0. Site details, lifetime energy, and alerts are read every six hours, or at the update interval if that is longer; the device inventory every twelve hours.",
         "data": {
           "scan_interval_minutes": "Update interval",
-          "device_telemetry": "Per-device telemetry"
+          "telemetry_inverters": "Inverter telemetry",
+          "telemetry_meters": "Meter telemetry",
+          "telemetry_storage": "Storage telemetry",
+          "telemetry_interval_minutes": "Inverter and meter interval",
+          "storage_interval_minutes": "Storage interval"
         },
         "data_description": {
-          "scan_interval_minutes": "How often production, consumption, and power are read. Each update costs two credits, plus one per device family when telemetry is on.",
-          "device_telemetry": "Add inverter, meter, and battery sensors. Costs up to three extra credits per update and needs the DEVICE_DATA scope."
+          "scan_interval_minutes": "How often production, consumption, and power are read, 15 to 1440 minutes. Costs two credits per update.",
+          "telemetry_inverters": "Add inverter sensors. Costs one credit per inverter interval; needs the DEVICE_DATA scope.",
+          "telemetry_meters": "Add meter sensors. Costs one credit per inverter and meter interval; needs the DEVICE_DATA scope.",
+          "telemetry_storage": "Add battery sensors. Costs one credit per storage interval; needs the DEVICE_DATA scope.",
+          "telemetry_interval_minutes": "Minutes between inverter and meter reads, 15 to 1440. 0 follows the update interval.",
+          "storage_interval_minutes": "Minutes between battery reads, 15 to 1440. 0 follows the update interval."
         }
       }
+    },
+    "error": {
+      "interval_too_short": "Use 0 to follow the update interval, or at least 15 minutes. SolarEdge data has 15-minute resolution."
     }
   },
   "entity": {
@@ -165,11 +176,11 @@
   "issues": {
     "credit_limit": {
       "title": "SolarEdge monthly API credits used up",
-      "description": "SolarEdge refused updates for site {site_id} because the developer account has no monthly credits left. Updates retry every six hours and resume when the billing cycle resets. To avoid this, raise the update interval or turn off per-device telemetry in the integration options, or move the developer account to a higher tier."
+      "description": "SolarEdge refused updates for site {site_id} because the developer account has no monthly credits left. Updates retry every six hours and resume when the billing cycle resets. To avoid this, raise the update intervals or turn off device telemetry in the integration options, or move the developer account to a higher tier."
     },
     "device_scope_missing": {
       "title": "SolarEdge device telemetry not permitted",
-      "description": "SolarEdge refused device telemetry for site {site_id}. Site Access tokens need the DEVICE_DATA scope. Reconfigure the entry and approve both scopes, or turn off per-device telemetry in the options. Site sensors keep working."
+      "description": "SolarEdge refused device telemetry for site {site_id}. Site Access tokens need the DEVICE_DATA scope. Reconfigure the entry and approve both scopes, or turn off device telemetry in the options. Site sensors keep working."
     }
   }
 }

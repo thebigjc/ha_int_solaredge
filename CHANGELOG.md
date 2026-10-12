@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Polling is configurable per data group. New options: inverter, meter, and
+  storage telemetry switches, an inverter and meter interval, a storage
+  interval (0 follows the update interval), and an update interval of up to
+  1440 minutes. The options form shows the estimated credits a month and warns
+  above the Free tier's 2,000. Defaults and the old `device_telemetry` option
+  behave exactly as before (true means all three families). Slow data follows
+  the update interval when that is longer than six hours.
+
 - Windowed requests (power, energy, inverter and meter telemetry) send `from`/`to`
   with a UTC offset, fixing the HTTP 400 "Failed to convert ... [Instant]" setup
   failure (upstream issue 7).

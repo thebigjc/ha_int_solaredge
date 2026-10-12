@@ -26,8 +26,18 @@ CONF_SCAN_INTERVAL_MINUTES: Final = "scan_interval_minutes"
 CONF_DEVICE_TELEMETRY: Final = "device_telemetry"
 DEFAULT_SCAN_INTERVAL_MINUTES: Final = 60
 MIN_SCAN_INTERVAL_MINUTES: Final = 15
-MAX_SCAN_INTERVAL_MINUTES: Final = 360
+MAX_SCAN_INTERVAL_MINUTES: Final = 1440
 DEFAULT_DEVICE_TELEMETRY: Final = False
+CONF_TELEMETRY_INVERTERS: Final = "telemetry_inverters"
+CONF_TELEMETRY_METERS: Final = "telemetry_meters"
+CONF_TELEMETRY_STORAGE: Final = "telemetry_storage"
+CONF_TELEMETRY_INTERVAL_MINUTES: Final = "telemetry_interval_minutes"
+CONF_STORAGE_INTERVAL_MINUTES: Final = "storage_interval_minutes"
+FOLLOW_SITE_INTERVAL: Final = 0
+
+MINUTES_PER_MONTH: Final = 30 * 24 * 60
+# Monthly credits of SolarEdge's Free tier; other tiers differ, so exceeding it only warns.
+FREE_TIER_MONTHLY_CREDITS: Final = 2000
 
 SLOW_UPDATE_INTERVAL: Final = timedelta(hours=6)
 INVENTORY_UPDATE_INTERVAL: Final = timedelta(hours=12)

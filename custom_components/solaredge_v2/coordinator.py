@@ -27,18 +27,14 @@ from .api import (
     SolarEdgeRateLimitError,
 )
 from .const import (
-    CONF_DEVICE_TELEMETRY,
-    CONF_SCAN_INTERVAL_MINUTES,
     CONF_SITE_ID,
-    DEFAULT_DEVICE_TELEMETRY,
-    DEFAULT_SCAN_INTERVAL_MINUTES,
     DOMAIN,
     INVENTORY_UPDATE_INTERVAL,
     ISSUE_CREDIT_LIMIT,
     ISSUE_SCOPE_MISSING,
     LOGGER,
-    SLOW_UPDATE_INTERVAL,
 )
+from .polling import PollingPlan, resolve_plan
 
 if TYPE_CHECKING:
     from . import SolarEdgeConfigEntry
@@ -57,19 +53,19 @@ class SolarEdgeCoordinator(DataUpdateCoordinator[SiteData]):
         self, hass: HomeAssistant, entry: SolarEdgeConfigEntry, client: SolarEdgeClient
     ) -> None:
         """Read the polling options from the entry."""
-        minutes = entry.options.get(CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES)
+        plan = resolve_plan(entry.options)
         super().__init__(
             hass,
             LOGGER,
             config_entry=entry,
             name=f"{DOMAIN} {entry.data[CONF_SITE_ID]}",
-            update_interval=timedelta(minutes=minutes),
+            update_interval=plan.tick,
         )
         self.client = client
         self.site_id = int(entry.data[CONF_SITE_ID])
-        self.device_telemetry: bool = entry.options.get(
-            CONF_DEVICE_TELEMETRY, DEFAULT_DEVICE_TELEMETRY
-        )
+        self.plan: PollingPlan = plan
+        self._last_site: datetime | None = None
+        self._last_telemetry: dict[DeviceType, datetime] = {}
         self._last_slow: datetime | None = None
         self._last_inventory: datetime | None = None
         self.scope_denied = False
@@ -83,7 +79,7 @@ class SolarEdgeCoordinator(DataUpdateCoordinator[SiteData]):
         self._last_inventory = dt_util.utcnow()
 
     async def _async_update_data(self) -> SiteData:
-        """Fetch the fast data every interval and the slow data when it is due."""
+        """Fetch each data group whose own interval has elapsed."""
         data = self.data
         now = dt_util.utcnow()
         async with self._translate_errors():
@@ -93,7 +89,7 @@ class SolarEdgeCoordinator(DataUpdateCoordinator[SiteData]):
                 )
                 self._last_inventory = now
                 self._remove_stale_devices()
-            if self._due(self._last_slow, SLOW_UPDATE_INTERVAL, now):
+            if self._due(self._last_slow, timedelta(minutes=self.plan.slow_minutes), now):
                 data.metadata = await self.client.async_get_site(self.site_id)
                 if data.metadata.installation_date is not None:
                     data.lifetime_energy = await self.client.async_get_lifetime_energy(
@@ -103,31 +99,49 @@ class SolarEdgeCoordinator(DataUpdateCoordinator[SiteData]):
                     )
                 data.open_alerts = await self.client.async_get_open_alerts(self.site_id)
                 self._last_slow = now
-            data.overview = await self.client.async_get_overview(self.site_id)
-            site_now = self._site_now()
-            data.power = await self.client.async_get_power(
-                self.site_id, site_now - POWER_WINDOW, site_now
-            )
-            if self.device_telemetry and not self.scope_denied:
-                await self._async_update_device_telemetry(data)
+            if self._due(self._last_site, timedelta(minutes=self.plan.site_minutes), now):
+                data.overview = await self.client.async_get_overview(self.site_id)
+                site_now = self._site_now()
+                data.power = await self.client.async_get_power(
+                    self.site_id, site_now - POWER_WINDOW, site_now
+                )
+                self._last_site = now
+            if self.plan.any_telemetry and not self.scope_denied:
+                await self._async_update_device_telemetry(data, now)
         ir.async_delete_issue(self.hass, DOMAIN, self._issue_id(ISSUE_CREDIT_LIMIT))
         return data
 
-    async def _async_update_device_telemetry(self, data: SiteData) -> None:
-        types = {d.type for d in data.devices if d.active}
+    def _telemetry_due(self, kind: DeviceType, now: datetime) -> bool:
+        """Whether this device family is enabled, present, and past its own interval."""
+        plan = self.plan
+        enabled, minutes = {
+            DeviceType.INVERTER: (plan.inverters, plan.telemetry_minutes),
+            DeviceType.METER: (plan.meters, plan.telemetry_minutes),
+            DeviceType.BATTERY: (plan.storage, plan.storage_minutes),
+        }[kind]
+        return (
+            enabled
+            and any(d.type == kind and d.active for d in self.data.devices)
+            and self._due(self._last_telemetry.get(kind), timedelta(minutes=minutes), now)
+        )
+
+    async def _async_update_device_telemetry(self, data: SiteData, now: datetime) -> None:
         end = self._site_now()
         start = end.replace(hour=0, minute=0, second=0, microsecond=0)
         try:
-            if DeviceType.INVERTER in types:
+            if self._telemetry_due(DeviceType.INVERTER, now):
                 data.inverters = await self.client.async_get_inverter_telemetry(
                     self.site_id, start, end
                 )
-            if DeviceType.METER in types:
+                self._last_telemetry[DeviceType.INVERTER] = now
+            if self._telemetry_due(DeviceType.METER, now):
                 data.meters = await self.client.async_get_meter_telemetry(
                     self.site_id, start, end
                 )
-            if DeviceType.BATTERY in types:
+                self._last_telemetry[DeviceType.METER] = now
+            if self._telemetry_due(DeviceType.BATTERY, now):
                 data.storage = await self.client.async_get_storage_telemetry(self.site_id)
+                self._last_telemetry[DeviceType.BATTERY] = now
         except SolarEdgeForbiddenError as err:
             self.scope_denied = True
             LOGGER.warning("Device telemetry refused for site %s: %s", self.site_id, err)

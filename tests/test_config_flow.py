@@ -22,6 +22,7 @@ from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
 from yarl import URL
 
 from custom_components.solaredge_v2.api import BASE_URL
+from custom_components.solaredge_v2.config_flow import CREDIT_WARNING
 from custom_components.solaredge_v2.const import (
     AUTH_TYPE_API_KEY,
     AUTH_TYPE_OAUTH,
@@ -29,12 +30,18 @@ from custom_components.solaredge_v2.const import (
     CONF_DEVICE_TELEMETRY,
     CONF_SCAN_INTERVAL_MINUTES,
     CONF_SITE_ID,
+    CONF_STORAGE_INTERVAL_MINUTES,
+    CONF_TELEMETRY_INTERVAL_MINUTES,
+    CONF_TELEMETRY_INVERTERS,
+    CONF_TELEMETRY_METERS,
+    CONF_TELEMETRY_STORAGE,
     DOMAIN,
     OAUTH2_AUTHORIZE,
     OAUTH2_TOKEN,
     OAUTH_CALLBACK_PATH,
     OAUTH_PENDING_TTL,
 )
+from custom_components.solaredge_v2.polling import resolve_plan
 
 from .conftest import CLIENT_ID, CLIENT_SECRET, SITE, SITE_ID, MockApi
 
@@ -496,14 +503,72 @@ async def test_api_key_reconfigure(hass: HomeAssistant, mock_api: MockApi, api_k
 
 
 async def test_options(hass: HomeAssistant, api_key_entry: MockConfigEntry) -> None:
-    """Options store the interval and the telemetry switch."""
+    """Options store the site interval, per-family switches, and telemetry intervals."""
     result = await hass.config_entries.options.async_init(api_key_entry.entry_id)
     assert result["step_id"] == "init"
+    # The fixture entry has the old device_telemetry switch on: all families, 60 minutes.
+    assert result["description_placeholders"] == {"credits": "4,020", "warning": CREDIT_WARNING}
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {CONF_SCAN_INTERVAL_MINUTES: 30.0, CONF_DEVICE_TELEMETRY: False}
+        result["flow_id"],
+        {
+            CONF_SCAN_INTERVAL_MINUTES: 720.0,
+            CONF_TELEMETRY_INVERTERS: False,
+            CONF_TELEMETRY_METERS: False,
+            CONF_TELEMETRY_STORAGE: True,
+            CONF_TELEMETRY_INTERVAL_MINUTES: 0.0,
+            CONF_STORAGE_INTERVAL_MINUTES: 30.0,
+        },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert api_key_entry.options == {CONF_SCAN_INTERVAL_MINUTES: 30, CONF_DEVICE_TELEMETRY: False}
+    assert api_key_entry.options == {
+        CONF_SCAN_INTERVAL_MINUTES: 720,
+        CONF_TELEMETRY_INVERTERS: False,
+        CONF_TELEMETRY_METERS: False,
+        CONF_TELEMETRY_STORAGE: True,
+        CONF_TELEMETRY_INTERVAL_MINUTES: 0,
+        CONF_STORAGE_INTERVAL_MINUTES: 30,
+    }
+
+
+async def test_options_form_defaults_from_old_entry(hass: HomeAssistant, api_key_entry: MockConfigEntry) -> None:
+    """Resubmitting an untouched form keeps an old entry's behaviour and drops the old key."""
+    hass.config_entries.async_update_entry(
+        api_key_entry, options={CONF_SCAN_INTERVAL_MINUTES: 45, CONF_DEVICE_TELEMETRY: True}
+    )
+    result = await hass.config_entries.options.async_init(api_key_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert api_key_entry.options == {
+        CONF_SCAN_INTERVAL_MINUTES: 45,
+        CONF_TELEMETRY_INVERTERS: True,
+        CONF_TELEMETRY_METERS: True,
+        CONF_TELEMETRY_STORAGE: True,
+        CONF_TELEMETRY_INTERVAL_MINUTES: 0,
+        CONF_STORAGE_INTERVAL_MINUTES: 0,
+    }
+    assert resolve_plan(api_key_entry.options) == resolve_plan(
+        {CONF_SCAN_INTERVAL_MINUTES: 45, CONF_DEVICE_TELEMETRY: True}
+    )
+
+
+async def test_options_default_entry_shows_estimate_without_warning(
+    hass: HomeAssistant, api_key_entry: MockConfigEntry
+) -> None:
+    """A default entry shows 1,860 credits and no warning."""
+    hass.config_entries.async_update_entry(api_key_entry, options={})
+    result = await hass.config_entries.options.async_init(api_key_entry.entry_id)
+    assert result["description_placeholders"] == {"credits": "1,860", "warning": ""}
+
+
+async def test_options_reject_interval_under_15(hass: HomeAssistant, api_key_entry: MockConfigEntry) -> None:
+    """A telemetry interval of 1 to 14 minutes is refused; 0 means follow the site."""
+    result = await hass.config_entries.options.async_init(api_key_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_STORAGE_INTERVAL_MINUTES: 5.0}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_STORAGE_INTERVAL_MINUTES: "interval_too_short"}
+    assert result["description_placeholders"]["credits"]
 
 
 async def test_missing_credentials(hass: HomeAssistant) -> None:

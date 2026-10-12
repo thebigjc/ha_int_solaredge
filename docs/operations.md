@@ -15,8 +15,19 @@ Stored in `ConfigEntry.options` (behavior); changing them reloads the entry:
 
 | Key | Default | Bounds | Consequence |
 | --- | --- | --- | --- |
-| `scan_interval_minutes` | 60 | 15 to 360 | Fast-cadence interval. Lower than 15 spends credits on an unchanged bucket, so the form does not allow it. |
-| `device_telemetry` | false | | Creates inverter, meter, and battery sensors; costs one credit per device family per update. |
+| `scan_interval_minutes` | 60 | 15 to 1440 | Site interval (overview and power). Lower than 15 spends credits on an unchanged bucket, so the form does not allow it. 1440 (once a day) is the maximum: a slower site poll leaves "today" totals stale for more than a day. |
+| `telemetry_inverters`, `telemetry_meters`, `telemetry_storage` | false | | Create that family's sensors and call its endpoint; one credit per call. |
+| `telemetry_interval_minutes` | 0 | 0 or 15 to 1440 | Inverter and meter interval. 0 follows `scan_interval_minutes`. |
+| `storage_interval_minutes` | 0 | 0 or 15 to 1440 | Storage interval. 0 follows `scan_interval_minutes`. |
+| `device_telemetry` | false | | Legacy switch, read only when the three per-family keys are absent: true means all three on. The options form rewrites the entry with the new keys. |
+
+The coordinator ticks at the greatest common divisor of the site interval and
+the enabled telemetry intervals and calls only the groups that are due. Slow
+data (metadata, lifetime energy, alerts) is read every six hours, or at the
+site interval when that is longer. Inventory stays at 12 hours. Data of a group
+that is not due keeps its last value, so entities do not flap. The options form
+shows the estimated monthly cost (`polling.estimate_monthly_credits`) and warns
+above 2,000.
 
 ## Credit budget
 
@@ -34,6 +45,14 @@ family present. For a site with one inverter family and nothing else, that is
 720 more at 60 minutes (2,580 total, over the Free tier's 2,000) or 480 more
 at 90 minutes (fast 3 x 480 = 1,440, plus 420, for 1,860 total). A site with
 inverter, meter, and battery at 120 minutes uses 5 x 360 + 420 = 2,220.
+
+Other combinations (30-day month, every enabled family present):
+
+| Settings | Credits |
+| --- | --- |
+| Defaults (site 60 minutes, no telemetry) | 1,860 |
+| Battery only every 30 minutes, site every 12 hours | 1,800 (site 120, storage 1,440, slow 180, inventory 60) |
+| Everything every 30 minutes | 7,620 |
 
 Setup and every reload spend two credits (metadata and inventory) plus one
 full first refresh (five credits, more with telemetry), so repeated reloads
