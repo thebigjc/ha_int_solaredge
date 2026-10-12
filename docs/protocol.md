@@ -60,8 +60,10 @@ shape. Nothing in this table has been verified against the live API yet; see
 | `GET /sites/{id}/meters/telemetry` | same | Documented, tested |
 | `GET /sites/{id}/storage/telemetry` | same | Documented, tested |
 
-Date parameters are ISO 8601 date-times without an offset, interpreted in site
-local time (documented worked example: `from=2026-05-01T00:00:00`).
+Date parameters are ISO 8601 instants with an explicit offset, for example
+`from=2026-10-12T09:00:00-04:00` (`Z` is also accepted). An offset-free value
+is rejected with HTTP 400 "Failed to convert [...] to required type [Instant]"
+(upstream issue 7). The integration sends site-local time with its offset.
 
 ## Response shapes and units
 

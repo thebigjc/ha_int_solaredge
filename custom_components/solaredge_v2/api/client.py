@@ -177,10 +177,16 @@ class SolarEdgeClient:
 
 
 def _window(start: datetime, end: datetime) -> list[tuple[str, str]]:
-    """Format a window as the site-local, offset-free timestamps the API expects."""
+    """Format a window as ISO 8601 instants with an explicit UTC offset.
+
+    The API converts from/to to an Instant and answers HTTP 400 when the offset is
+    missing. Naive datetimes are refused rather than guessed at.
+    """
+    if start.utcoffset() is None or end.utcoffset() is None:
+        raise ValueError("window start and end must be timezone-aware")
     return [
-        ("from", start.strftime("%Y-%m-%dT%H:%M:%S")),
-        ("to", end.strftime("%Y-%m-%dT%H:%M:%S")),
+        ("from", start.isoformat(timespec="seconds")),
+        ("to", end.isoformat(timespec="seconds")),
     ]
 
 

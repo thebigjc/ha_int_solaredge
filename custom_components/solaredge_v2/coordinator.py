@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING
 
 from aiohttp import ClientError
@@ -98,7 +98,7 @@ class SolarEdgeCoordinator(DataUpdateCoordinator[SiteData]):
                 if data.metadata.installation_date is not None:
                     data.lifetime_energy = await self.client.async_get_lifetime_energy(
                         self.site_id,
-                        data.metadata.installation_date.replace(tzinfo=None),
+                        self._as_site_time(data.metadata.installation_date),
                         self._site_now(),
                     )
                 data.open_alerts = await self.client.async_get_open_alerts(self.site_id)
@@ -143,11 +143,17 @@ class SolarEdgeCoordinator(DataUpdateCoordinator[SiteData]):
         else:
             ir.async_delete_issue(self.hass, DOMAIN, self._issue_id(ISSUE_SCOPE_MISSING))
 
-    def _site_now(self) -> datetime:
-        """Wall-clock time at the site, without an offset, as the API's from/to expect."""
+    def _site_tz(self) -> tzinfo:
         zone = self.data.metadata.timezone if self.data else None
-        tz = (dt_util.get_time_zone(zone) if zone else None) or dt_util.get_default_time_zone()
-        return dt_util.now(tz).replace(tzinfo=None, microsecond=0)
+        return (dt_util.get_time_zone(zone) if zone else None) or dt_util.get_default_time_zone()
+
+    def _site_now(self) -> datetime:
+        """Current time at the site, offset-aware, as the API's from/to expect."""
+        return dt_util.now(self._site_tz()).replace(microsecond=0)
+
+    def _as_site_time(self, value: datetime) -> datetime:
+        """Return value offset-aware, reading a naive one as site-local time."""
+        return value if value.tzinfo else value.replace(tzinfo=self._site_tz())
 
     def _translate_errors(self) -> _ErrorTranslator:
         return _ErrorTranslator(self)

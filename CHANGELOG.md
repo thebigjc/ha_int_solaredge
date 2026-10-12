@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Windowed requests (power, energy, inverter and meter telemetry) send `from`/`to`
+  with a UTC offset, fixing the HTTP 400 "Failed to convert ... [Instant]" setup
+  failure (upstream issue 7).
 - Site Access sign-in no longer depends on `state`, which SolarEdge does not
   return (upstream issues 6, 8, 15). The integration serves its own callback at
   `/api/solaredge_v2/oauth/callback`, uses PKCE S256, and takes `site_id` from

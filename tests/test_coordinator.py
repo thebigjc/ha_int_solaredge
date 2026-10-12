@@ -235,8 +235,8 @@ async def test_windows_use_site_local_time(
         call = next(c for c in aioclient_mock.mock_calls if str(c[1]).split("?")[0] == f"{SITE}{suffix}")
         return dict(call[1].query)
 
-    assert query("/power")["from"] == "2026-09-29T12:05:00"
-    assert query("/power")["to"] == "2026-09-29T13:05:00"
-    assert query("/inverters/telemetry")["from"] == "2026-09-29T00:00:00"
-    assert query("/inverters/telemetry")["to"] == "2026-09-29T13:05:00"
-    assert query("/energy")["from"] == "2021-04-01T00:00:00"
+    assert query("/power")["from"] == "2026-09-29T12:05:00-05:00"
+    assert query("/power")["to"] == "2026-09-29T13:05:00-05:00"
+    assert query("/inverters/telemetry")["from"] == "2026-09-29T00:00:00-05:00"
+    assert query("/inverters/telemetry")["to"] == "2026-09-29T13:05:00-05:00"
+    assert query("/energy")["from"] == "2021-04-01T00:00:00-05:00"
