@@ -16,7 +16,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry, async_
 
 from custom_components.solaredge_v2.const import DOMAIN
 
-from .conftest import MockApi
+from .conftest import MockApi, load
 
 
 @pytest.fixture(autouse=True)
@@ -203,3 +203,56 @@ async def test_unparseable_bucket_time_omits_attributes(
     state = hass.states.get("sensor.battery_1_state_of_energy")
     assert float(state.state) == 50.0
     assert "data_timestamp" not in state.attributes
+
+
+def _unique_ids(hass: HomeAssistant, entry: MockConfigEntry) -> list[str]:
+    registry = er.async_get(hass)
+    return sorted(e.unique_id for e in er.async_entries_for_config_entry(registry, entry.entry_id))
+
+
+async def test_meter_listed_twice_yields_one_device_and_entity_set(
+    hass: HomeAssistant,
+    mock_api: MockApi,
+    api_key_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The same meter serial listed in two roles creates one device and no duplicate IDs."""
+    devices = load("devices.json")
+    meter = devices[1]
+    devices += [
+        {**meter, "serialNumber": "M-GRID-001", "name": "Import Meter", "meterType": "IMPORT"},
+        {**meter, "serialNumber": "M-GRID-001", "name": "Export Meter", "meterType": "EXPORT"},
+    ]
+    mock_api(devices=devices)
+    await _setup(hass, api_key_entry)
+    assert "does not generate unique IDs" not in caplog.text
+    ids = _unique_ids(hass, api_key_entry)
+    assert len(ids) == len(set(ids))
+    assert len([i for i in ids if i.startswith("M-GRID-001_")]) == len(
+        [i for i in ids if i.startswith("M-PROD-001_")]
+    )
+    devs = [
+        d
+        for d in dr.async_entries_for_config_entry(dr.async_get(hass), api_key_entry.entry_id)
+        if (DOMAIN, "M-GRID-001") in d.identifiers
+    ]
+    assert len(devs) == 1
+
+
+async def test_entity_set_stable_across_inventory_refreshes(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_api: MockApi,
+    api_key_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A later inventory pass, even with a duplicate row, neither re-adds nor loses entities."""
+    await _setup(hass, api_key_entry)
+    before = _unique_ids(hass, api_key_entry)
+    devices = load("devices.json")
+    mock_api(devices=[*devices, devices[1]])
+    freezer.tick(timedelta(hours=13))
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert "does not generate unique IDs" not in caplog.text
+    assert _unique_ids(hass, api_key_entry) == before

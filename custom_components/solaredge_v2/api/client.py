@@ -127,11 +127,14 @@ class SolarEdgeClient:
         body = await self._request(
             f"/sites/{site_id}/devices", [("types", t.value) for t in types]
         )
-        return [
-            Device.from_api(i)
-            for i in (body if isinstance(body, list) else [])
-            if isinstance(i, dict) and i.get("serialNumber")
-        ]
+        devices: dict[str, Device] = {}
+        for item in body if isinstance(body, list) else []:
+            if isinstance(item, dict) and item.get("serialNumber"):
+                device = Device.from_api(item)
+                # One physical device may be listed once per role (e.g. an import and an
+                # export meter share a serial); the first listing wins, deterministically.
+                devices.setdefault(device.serial_number, device)
+        return list(devices.values())
 
     async def async_get_open_alerts(self, site_id: int) -> list[Alert]:
         """GET /sites/{id}/alerts, open alerts only, first page of 100."""
