@@ -185,6 +185,15 @@ async def test_site_without_id(hass: HomeAssistant, aioclient_mock: AiohttpClien
         await _client(hass).async_get_site(SITE_ID)
 
 
+async def test_devices_skip_entries_without_serial(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker) -> None:
+    """Non-object entries and entries without a serial number are not devices."""
+    aioclient_mock.get(
+        f"{SITE}/devices",
+        json=["junk", {"type": "METER"}, {"serialNumber": "", "type": "METER"}],
+    )
+    assert await _client(hass).async_get_devices(SITE_ID, [DeviceType.METER]) == []
+
+
 async def test_unexpected_shapes_are_empty(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker) -> None:
     """Lists and maps of the wrong type produce empty results rather than errors."""
     for path in ("overview", "devices", "alerts", "inverters/telemetry", "power"):
