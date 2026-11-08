@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+import json
+import logging
 from typing import Any, cast, override
 
 from aiohttp import ClientResponseError
@@ -20,8 +22,11 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import LocalOAuth2ImplementationWithPkce
 from yarl import URL
 
+from .api.redact import safe_body, trace_headers
 from .const import OAUTH2_ACCESS_DURATION_MONTHS, OAUTH2_AUTHORIZE, OAUTH2_SCOPES, OAUTH2_TOKEN
 from .oauth import async_pending, callback_url, callback_url_hint
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SolarEdgeOAuth2Implementation(AuthImplementation):
@@ -82,7 +87,14 @@ class SolarEdgeOAuth2Implementation(AuthImplementation):
         """Post the token request as JSON and map failures like the core helper."""
         payload = {**data, "client_id": self.client_id, "client_secret": self.client_secret}
         session = async_get_clientsession(self.hass)
+        _LOGGER.debug("OAuth token request: %s", safe_body(json.dumps(data)))
         resp = await session.post(self.token_url, json=payload)
+        _LOGGER.debug(
+            "OAuth token response: HTTP %s trace=%s body=%s",
+            resp.status,
+            trace_headers(resp.headers),
+            safe_body(await resp.text(errors="replace")),
+        )
         try:
             resp.raise_for_status()
         except ClientResponseError as err:

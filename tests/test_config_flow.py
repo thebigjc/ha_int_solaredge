@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import logging
 from typing import Any
 from unittest.mock import patch
 
@@ -576,3 +577,24 @@ async def test_missing_credentials(hass: HomeAssistant) -> None:
     result = await _start(hass, "oauth")
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "missing_credentials"
+
+
+@pytest.mark.usefixtures("credentials")
+async def test_callback_logs_error_but_never_the_code(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    caplog: pytest.LogCaptureFixture,
+    mock_api: MockApi,
+) -> None:
+    """SolarEdge's error reaches the debug log; an authorization code does not."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.solaredge_v2")
+    await _start(hass, "oauth")
+    await _callback(hass_client_no_auth, "error=400.9&error_description=already-linked")
+    assert "400.9" in caplog.text
+    assert "already-linked" in caplog.text
+
+    await _start(hass, "oauth")
+    await _callback(hass_client_no_auth, "code=secret-auth-code&site_id=1234567")
+    ours = [r.getMessage() for r in caplog.records if r.name.startswith("custom_components.solaredge_v2")]
+    assert any("***" in message for message in ours)
+    assert not any("secret-auth-code" in message for message in ours)

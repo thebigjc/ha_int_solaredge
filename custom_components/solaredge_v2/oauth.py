@@ -24,6 +24,7 @@ from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.util import dt as dt_util
 from homeassistant.util.hass_dict import HassKey
 
+from .api.redact import safe_query
 from .const import DOMAIN, OAUTH_CALLBACK_PATH, OAUTH_PENDING_TTL
 
 _LOGGER = logging.getLogger(__name__)
@@ -134,6 +135,7 @@ class SolarEdgeOAuthCallbackView(HomeAssistantView):
 
         pending = async_pending(hass)
         active = pending.active()
+        _LOGGER.debug("OAuth callback: %s, flows waiting: %d", safe_query(query), len(active))
         if (state := query.get("state")) is not None:
             matches = [p for p in active if secrets.compare_digest(p.state, state)]
         else:

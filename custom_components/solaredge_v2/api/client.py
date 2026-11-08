@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Sequence
 from datetime import datetime
 from http import HTTPStatus
+import logging
 from typing import Any
 
 from aiohttp import ClientError, ClientResponse, ClientSession
@@ -30,8 +31,11 @@ from .models import (
     Telemetry,
     parse_telemetry,
 )
+from .redact import safe_body, trace_headers
 
-BASE_URL = "https://monitoringapi.solaredge.com/v2"
+_LOGGER = logging.getLogger(__name__)
+
+BASE_URL ="https://monitoringapi.solaredge.com/v2"
 DEFAULT_TIMEOUT = 30.0
 SITES_PAGE_SIZE = 1000
 
@@ -63,7 +67,19 @@ class SolarEdgeClient:
                     f"{self._base_url}{path}", params=params or (), headers=headers
                 )
                 async with response:
+                    _LOGGER.debug(
+                        "GET %s params=%s: HTTP %s trace=%s",
+                        path,
+                        list(params or ()),
+                        response.status,
+                        trace_headers(response.headers),
+                    )
                     if response.status >= 400:
+                        _LOGGER.debug(
+                            "GET %s error body: %s",
+                            path,
+                            safe_body(await response.text(errors="replace")),
+                        )
                         raise await _error_for(response)
                     return await response.json(content_type=None)
         except TimeoutError as err:

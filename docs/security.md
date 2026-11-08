@@ -48,6 +48,11 @@ captured record, in no `last_exception`, and in no request URL. They were
 checked against a deliberate leak (interpolating the request headers into the
 client's error text), which they catch.
 
+Debug logging (`custom_components.solaredge_v2`) records each API path and status,
+token and callback traffic, and error bodies for diagnosis. `api/redact.py` masks
+secret fields and long opaque values first, `tests/test_debug_logging.py` pins this,
+and successful API bodies are never logged.
+
 ## Diagnostics
 
 Diagnostics redact `api_key`, `token`, `access_token`, and `refresh_token`.
